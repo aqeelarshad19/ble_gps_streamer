@@ -1,133 +1,249 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LoRa Wardrive GPS Streamer</title>
-  <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 20px; background: #0d1117; color: #c9d1d9; }
-    .card { background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 20px; max-width: 450px; margin: 0 auto; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
-    h2 { margin-top: 0; color: #58a6ff; text-align: center; }
-    button { background: #238636; color: white; border: none; padding: 14px 20px; font-size: 16px; border-radius: 8px; cursor: pointer; width: 100%; font-weight: bold; margin-bottom: 10px; transition: background 0.2s; }
-    button:active { background: #2ea043; }
-    button.stop { background: #da3633; }
-    .coords { font-size: 20px; font-weight: bold; color: #3fb950; margin: 20px 0; text-align: center; background: #21262d; padding: 12px; border-radius: 8px; border: 1px solid #30363d; }
-    .status { padding: 12px; border-radius: 8px; background: #010409; font-family: monospace; font-size: 13px; max-height: 200px; overflow-y: auto; border: 1px solid #21262d; }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 LoRa GPS Streamer</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #121212;
+            color: #ffffff;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .card {
+            background-color: #1e1e1e;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            font-size: 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            width: 100%;
+            font-weight: bold;
+            transition: background-color 0.2s;
+        }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #555; cursor: not-allowed; }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: 14px;
+            font-weight: bold;
+            background-color: #dc3545;
+        }
+        .status-badge.connected { background-color: #28a745; }
+        
+        .data-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 10px 0;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #333;
+        }
+        
+        /* Terminal styling for incoming ESP32 messages */
+        #terminal {
+            background-color: #000;
+            color: #00ff00;
+            font-family: monospace;
+            height: 300px;
+            overflow-y: auto;
+            padding: 10px;
+            border-radius: 5px;
+            border: 1px solid #333;
+            font-size: 13px;
+        }
+        .log-entry { margin-bottom: 4px; }
+    </style>
 </head>
 <body>
-  <div class="card">
-    <h2>📡 LoRa GPS Streamer</h2>
-    <p style="text-align: center; font-size: 14px; color: #8b949e;">Stream live phone coordinates to your ESP32 Wardriver.</p>
+
+    <h2>🛰️ LoRa Wardriver Controller</h2>
     
-    <button id="connectBtn">Connect to ESP32</button>
-    <button id="disconnectBtn" class="stop" style="display:none;">Disconnect</button>
+    <div class="card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <span>BLE Status:</span>
+            <span id="ble-status" class="status-badge">Disconnected</span>
+        </div>
+        <button id="connect-btn">Connect to ESP32</button>
+    </div>
 
-    <div class="coords" id="coordsDisplay">GPS: Idle</div>
-    <div class="status" id="logBox">Status: Waiting for user action...</div>
-  </div>
+    <div class="card">
+        <h3>📍 GPS Telemetry</h3>
+        <div class="data-row">
+            <span>Latitude:</span>
+            <strong id="lat-display">--</strong>
+        </div>
+        <div class="data-row">
+            <span>Longitude:</span>
+            <strong id="lng-display">--</strong>
+        </div>
+        <div class="data-row">
+            <span>Accuracy:</span>
+            <strong id="acc-display">--</strong>
+        </div>
+        <p style="font-size: 12px; color: #aaa;">GPS updates are automatically pushed to ESP32 when connected.</p>
+    </div>
 
-  <script>
-    const SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
-    const CHARACTERISTIC_RX_UUID = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+    <div class="card">
+        <h3>📡 ESP32 Live Stream</h3>
+        <div id="terminal">
+            <div style="color: #888;">// Waiting for connection...</div>
+        </div>
+    </div>
 
-    let bleDevice = null;
-    let rxCharacteristic = null;
-    let watchId = null;
+    <script>
+        // Web Bluetooth UUIDs (Must be lowercase in JavaScript!)
+        const SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+        const RX_UUID      = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"; // Browser writes GPS here
+        const TX_UUID      = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"; // ESP32 sends status here
 
-    const connectBtn = document.getElementById('connectBtn');
-    const disconnectBtn = document.getElementById('disconnectBtn');
-    const coordsDisplay = document.getElementById('coordsDisplay');
-    const logBox = document.getElementById('logBox');
+        let bleDevice = null;
+        let rxCharacteristic = null;
+        let gpsWatchId = null;
+        let lastGpsString = "NO_GPS_FIX";
 
-    function log(msg) {
-      const time = new Date().toLocaleTimeString();
-      logBox.innerHTML = `<div>[${time}] ${msg}</div>` + logBox.innerHTML;
-    }
+        // UI Elements
+        const connectBtn = document.getElementById('connect-btn');
+        const bleStatus = document.getElementById('ble-status');
+        const terminal = document.getElementById('terminal');
 
-    connectBtn.addEventListener('click', async () => {
-      try {
-        log("Searching for BLE devices...");
-        bleDevice = await navigator.bluetooth.requestDevice({
-          filters: [{ name: 'ESP32-LoRa-Wardriver' }],
-          optionalServices: [SERVICE_UUID]
+        // --- BLE Connection Logic ---
+        connectBtn.addEventListener('click', async () => {
+            if (bleDevice && bleDevice.gatt.connected) {
+                bleDevice.gatt.disconnect();
+                return;
+            }
+
+            try {
+                logToTerminal("Requesting Bluetooth Device...");
+                bleDevice = await navigator.bluetooth.requestDevice({
+                    filters: [{ namePrefix: "ESP32-LoRa" }],
+                    optionalServices: [SERVICE_UUID]
+                });
+
+                bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
+
+                logToTerminal("Connecting to GATT Server...");
+                const server = await bleDevice.gatt.connect();
+
+                logToTerminal("Discovering Service...");
+                const service = await server.getPrimaryService(SERVICE_UUID);
+
+                // 1. Get RX for sending GPS to ESP32
+                rxCharacteristic = await service.getCharacteristic(RX_UUID);
+                
+                // 2. Get TX for receiving status logs from ESP32
+                const txCharacteristic = await service.getCharacteristic(TX_UUID);
+                
+                // Subscribe to notifications
+                await txCharacteristic.startNotifications();
+                txCharacteristic.addEventListener('characteristicvaluechanged', handleIncomingData);
+
+                updateStatus(true);
+                logToTerminal("✅ Connected & Subscribed to telemetry!");
+
+                // Start GPS tracking once connected
+                startGpsTracking();
+
+            } catch (error) {
+                logToTerminal(`❌ Error: ${error}`);
+                console.error(error);
+            }
         });
 
-        log(`Connecting to ${bleDevice.name}...`);
-        bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
-
-        const server = await bleDevice.gatt.connect();
-        log("GATT Server connected. Locating Nordic UART service...");
-
-        const service = await server.getPrimaryService(SERVICE_UUID);
-        rxCharacteristic = await service.getCharacteristic(CHARACTERISTIC_RX_UUID);
-
-        log("✅ Connected! Starting GPS stream...");
-        connectBtn.style.display = 'none';
-        disconnectBtn.style.display = 'block';
-
-        startGpsTracking();
-
-      } catch (error) {
-        log(`❌ Connection failed: ${error.message}`);
-      }
-    });
-
-    disconnectBtn.addEventListener('click', () => {
-      if (bleDevice && bleDevice.gatt.connected) {
-        bleDevice.gatt.disconnect();
-      }
-    });
-
-    function onDisconnected() {
-      log("⚠️ ESP32 BLE Disconnected.");
-      stopGpsTracking();
-      connectBtn.style.display = 'block';
-      disconnectBtn.style.display = 'none';
-      coordsDisplay.innerText = "GPS: Disconnected";
-    }
-
-    function startGpsTracking() {
-      if (!navigator.geolocation) {
-        log("❌ Geolocation not supported by browser.");
-        return;
-      }
-
-      watchId = navigator.geolocation.watchPosition(
-        async (position) => {
-          const lat = position.coords.latitude.toFixed(5);
-          const lon = position.coords.longitude.toFixed(5);
-          const gpsString = `${lat},${lon}`;
-          
-          coordsDisplay.innerText = `📍 ${gpsString}`;
-
-          if (rxCharacteristic) {
-            try {
-              const encoder = new TextEncoder();
-              await rxCharacteristic.writeValue(encoder.encode(gpsString));
-              log(`Sent to ESP32: ${gpsString}`);
-            } catch (err) {
-              log(`⚠️ Transmission error: ${err.message}`);
-            }
-          }
-        },
-        (err) => {
-          log(`❌ Location error: ${err.message}`);
-        },
-        {
-          enableHighAccuracy: true,
-          maximumAge: 3000,
-          timeout: 10000
+        // --- Handle Incoming ESP32 Data ---
+        function handleIncomingData(event) {
+            const value = event.target.value;
+            const decoder = new TextDecoder('utf-8');
+            const message = decoder.decode(value);
+            logToTerminal(message);
         }
-      );
-    }
 
-    function stopGpsTracking() {
-      if (watchId !== null) {
-        navigator.geolocation.clearWatch(watchId);
-        watchId = null;
-      }
-    }
-  </script>
+        // --- GPS Tracking & Sending ---
+        function startGpsTracking() {
+            if (!navigator.geolocation) {
+                logToTerminal("⚠️ Geolocation is not supported by your browser");
+                return;
+            }
+
+            gpsWatchId = navigator.geolocation.watchPosition(
+                (position) => {
+                    const lat = position.coords.latitude.toFixed(6);
+                    const lng = position.coords.longitude.toFixed(6);
+                    
+                    document.getElementById('lat-display').innerText = lat;
+                    document.getElementById('lng-display').innerText = lng;
+                    document.getElementById('acc-display').innerText = `±${position.coords.accuracy.toFixed(1)}m`;
+
+                    lastGpsString = `${lat},${lng}`;
+                    sendGpsToESP32(lastGpsString);
+                },
+                (error) => {
+                    logToTerminal(`⚠️ GPS Error: ${error.message}`);
+                },
+                { enableHighAccuracy: true, maximumAge: 0 }
+            );
+        }
+
+        async function sendGpsToESP32(gpsData) {
+            if (!rxCharacteristic) return;
+            try {
+                const encoder = new TextEncoder();
+                const data = encoder.encode(gpsData);
+                await rxCharacteristic.writeValue(data);
+                // logToTerminal(`Pushed GPS -> ${gpsData}`); // Optional: uncomment to see local GPS pushes
+            } catch (error) {
+                console.error("Write error:", error);
+            }
+        }
+
+        // --- Utility Functions ---
+        function onDisconnected() {
+            updateStatus(false);
+            logToTerminal("⚠️ Disconnected from ESP32");
+            rxCharacteristic = null;
+            if (gpsWatchId) {
+                navigator.geolocation.clearWatch(gpsWatchId);
+            }
+        }
+
+        function updateStatus(connected) {
+            if (connected) {
+                bleStatus.innerText = "Connected";
+                bleStatus.classList.add("connected");
+                connectBtn.innerText = "Disconnect";
+                connectBtn.style.backgroundColor = "#dc3545";
+            } else {
+                bleStatus.innerText = "Disconnected";
+                bleStatus.classList.remove("connected");
+                connectBtn.innerText = "Connect to ESP32";
+                connectBtn.style.backgroundColor = "#007bff";
+            }
+        }
+
+        function logToTerminal(message) {
+            const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+            const logEntry = document.createElement('div');
+            logEntry.className = 'log-entry';
+            logEntry.textContent = `[${time}] ${message}`;
+            terminal.appendChild(logEntry);
+            
+            // Auto-scroll to bottom
+            terminal.scrollTop = terminal.scrollHeight;
+        }
+    </script>
 </body>
 </html>
