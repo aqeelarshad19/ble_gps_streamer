@@ -186,7 +186,7 @@
                 
                 // 1. Send START command with file size
                 const encoder = new TextEncoder();
-                await otaCtrlCharacteristic.writeValue(encoder.encode(`START:${fileSize}`));
+                await otaCtrlCharacteristic.writeValueWithResponse(encoder.encode(`START:${fileSize}`));
                 
                 // Small delay to let ESP32 format flash
                 await new Promise(resolve => setTimeout(resolve, 1000));
@@ -199,8 +199,11 @@
                     const end = Math.min(start + CHUNK_SIZE, fileSize);
                     const chunk = firmware.slice(start, end);
 
-                    // Await guarantees flow control so we don't overwhelm the Bluetooth stack
-                    await otaDataCharacteristic.writeValue(chunk);
+                    // USE writeValueWithoutResponse for high-speed binary streaming
+                    await otaDataCharacteristic.writeValueWithoutResponse(chunk);
+                    
+                    // Add a tiny 20ms delay to prevent overflowing the ESP32 Bluetooth buffer!
+                    await new Promise(resolve => setTimeout(resolve, 20));
                     
                     const progress = Math.round(((i + 1) / totalChunks) * 100);
                     otaProgress.value = progress;
@@ -212,7 +215,7 @@
 
                 // 3. Send END command
                 otaStatus.innerText = "Verifying and Rebooting...";
-                await otaCtrlCharacteristic.writeValue(encoder.encode("END"));
+                await otaCtrlCharacteristic.writeValueWithResponse(encoder.encode("END"));
                 otaStatus.innerText = "✅ Update Complete! ESP32 is rebooting.";
                 
             } catch (error) {
