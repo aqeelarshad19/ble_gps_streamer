@@ -223,8 +223,12 @@
 
                 // 3. Send END command
                 otaStatus.innerText = "Verifying and Rebooting...";
+                
+                // Add an expected disconnect flag so we know it was on purpose
+                window.expectedOtaReboot = true; 
+                
                 await otaCtrlCharacteristic.writeValueWithResponse(encoder.encode("END"));
-                otaStatus.innerText = "✅ Update Complete! ESP32 is rebooting.";
+                otaStatus.innerText = "✅ Update Complete! Awaiting reboot...";
                 
             } catch (error) {
                 otaStatus.innerText = `❌ OTA Failed: ${error.message}`;
@@ -265,7 +269,12 @@
         // --- Utility Functions ---
         function onDisconnected() {
             updateStatus(false);
-            logToTerminal("⚠️ Disconnected from ESP32");
+            if (window.expectedOtaReboot) {
+                logToTerminal("🔄 ESP32 is rebooting to apply firmware. Please reconnect in 5 seconds.");
+                window.expectedOtaReboot = false; // reset
+            } else {
+                logToTerminal("⚠️ Disconnected from ESP32");
+            }
             rxCharacteristic = null;
             otaCtrlCharacteristic = null;
             otaDataCharacteristic = null;
